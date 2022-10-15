@@ -39,15 +39,15 @@ inline bool chk_delim(char x) {
 
 class Wrap {
 public:
+	std::string_view op = ""sv;
 	std::string_view func_name = ""sv;
-	bool use_stack = false;
-	std::vector<size_t> param_ids;
+	size_t param_count = 0;
+	size_t param_idx = 0;
 };
 
 class Wrap2 {
 public:
 	size_t count = 0;
-	bool use_stack = false;
 };
 
 std::pair<std::vector<Wrap>, std::vector<Data>> Generate(const char* str, size_t len) {
@@ -70,7 +70,7 @@ std::pair<std::vector<Wrap>, std::vector<Data>> Generate(const char* str, size_t
 
 		while (!chk_delim(str[idx2])) { idx2++; }
 
-		func_info_vec.push_back({ std::string_view(str + idx, idx2 - idx), Wrap2{ 0, false} });
+		func_info_vec.push_back({ std::string_view(str + idx, idx2 - idx), Wrap2{ 0 } });
 
 		idx = idx2;
 	}
@@ -87,27 +87,15 @@ param_found:
 		// (+ (* 3 5 ) 4)
 
 		Wrap temp;
+		temp.op = "func";
 		temp.func_name = func_info_vec.back().first;
-		temp.use_stack = func_info_vec.back().second.use_stack;
 
-		size_t sz = (func_info_vec.back().second.count);
-		for (size_t i = sz; i > 0; --i) {
-			temp.param_ids.push_back(param_vec.size() - i);
-		}
+		temp.param_count = func_info_vec.back().second.count;
 
 		func_info_vec.pop_back();
 
 		result.push_back(std::move(temp));
 		
-		if (!func_info_vec.empty()) {
-			Wrap temp;
-			temp.func_name = "$push"; // push 'recent result' to stack of VM.
-
-			result.push_back(std::move(temp));
-			func_info_vec.back().second.use_stack = true;
-		}
-		
-
 		//
 		idx++;
 		while (chk_ws(str[idx])) { idx++; }
@@ -118,6 +106,8 @@ param_found:
 		goto param_found;
 	}
 	else if (str[idx] == '(') {
+		func_info_vec.back().second.count++;
+
 		goto func_name_found;
 	}
 
@@ -131,6 +121,12 @@ param_found:
 		std::string x(str + idx, idx2 - idx);
 		param_vec.push_back(Data(std::move(x)));
 
+		Wrap temp;
+		temp.op = "push"sv;
+		temp.param_idx = param_vec.size() - 1;
+
+		result.push_back(std::move(temp));
+		
 		idx = idx2;
 		goto param_found;
 	}
@@ -147,44 +143,38 @@ class VM {
 public:
 	Data run(std::pair<std::vector<Wrap>, std::vector<Data>> code) {
 		
-		auto x = code.first;
-		
-		Data before_result;
+		auto& x = code.first;
 
 		std::vector<Data> _stack;
 
 		for (auto& _ : x) {
 			Data result;
 
-			if (_.func_name == "+"sv) {
-				long long value = 0;
-				while (!_stack.empty() && _.use_stack) {
-					value += std::stoi(_stack.back().x);
-					_stack.pop_back();
+			if (_.op == "func"sv) {
+				if (_.func_name == "+"sv) {
+					long long value = 0;
+					for (size_t i = 0; i < _.param_count; ++i) {
+						value += std::stoi(_stack.back().x);
+						_stack.pop_back();
+					}
+					result.x = std::to_string(value);
+					_stack.push_back(std::move(result));
 				}
-				for (size_t i = 0; i < _.param_ids.size(); ++i) {
-					value += std::stoi(code.second[_.param_ids[i]].x);
+				else if (_.func_name == "*"sv) {
+					long long value = 1;
+					for (size_t i = 0; i < _.param_count; ++i) {
+						value *= std::stoi(_stack.back().x);
+						_stack.pop_back();
+					}
+					result.x = std::to_string(value);
+					_stack.push_back(std::move(result));
 				}
-				result.x = std::to_string(value);
 			}
-			else if (_.func_name == "*"sv) {
-				long long value = 1;
-				while (!_stack.empty() && _.use_stack) {
-					value *= std::stoi(_stack.back().x);
-					_stack.pop_back();
-				}
-				for (size_t i = 0; i < _.param_ids.size(); ++i) {
-					value *= std::stoi(code.second[_.param_ids[i]].x);
-				}
-				result.x = std::to_string(value);
+			else if (_.op == "push"sv) {
+				_stack.push_back(code.second[_.param_idx]);
 			}
-			else if (_.func_name == "$push"sv) {
-				_stack.push_back(before_result);
-			}
-
-			before_result = std::move(result);
 		}
 
-		return before_result;
+		return _stack.back();
 	}
 };
